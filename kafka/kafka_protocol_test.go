@@ -1,15 +1,15 @@
 package kafka
 
 import (
-	"testing"
-	"net"
-	"fmt"
-	"time"
 	"bytes"
 	"encoding/binary"
-	"reflect"
+	"fmt"
 	"hash/crc32"
 	"io"
+	"net"
+	"reflect"
+	"testing"
+	"time"
 )
 
 type subject struct {
@@ -19,16 +19,13 @@ type subject struct {
 	s   [5]byte
 }
 
-
 // Testing binary.Write size investigation
 func TestStructSize(testing *testing.T) {
-	s := subject{int64(64), int32(32), int16(16), [5]byte{'h','e','l','l','o'}}
+	s := subject{int64(64), int32(32), int16(16), [5]byte{'h', 'e', 'l', 'l', 'o'}}
 
 	v := reflect.Indirect(reflect.ValueOf(s))
 	var t reflect.Type = v.Type()
 	fmt.Println(t)
-
-
 
 	switch t.Kind() {
 
@@ -57,11 +54,9 @@ func TestSliceSize(t *testing.T) {
 
 func TestEncodingStructAsByteSlice(t *testing.T) {
 
-	s := subject{int64(64), int32(32), int16(16), [5]byte{'h','e','l','l','o'}}
-
+	s := subject{int64(64), int32(32), int16(16), [5]byte{'h', 'e', 'l', 'l', 'o'}}
 
 	fmt.Printf("%v\n", binary.Size([]byte{1}))
-
 
 	//// *bytes.Buffer type
 	buff := new(bytes.Buffer)
@@ -85,7 +80,7 @@ func TestEncodingStructAsByteSlice(t *testing.T) {
 		t.FailNow()
 	}
 
-	for i, v := range(buff.Bytes()) {
+	for i, v := range buff.Bytes() {
 		if v != expected[i] {
 			t.FailNow()
 		}
@@ -109,7 +104,7 @@ Arrays
 This is a notation for handling repeated structures. These will always be encoded as an int32 size containing
 the length N followed by N repetitions of the structure which can itself be made up of other primitive types.
 In the BNF grammars below we will show an array of a structure foo as [foo].
- */
+*/
 
 func TestKafka(t *testing.T) {
 	conn, err := net.Dial("tcp", "kafka:9092")
@@ -190,7 +185,7 @@ func TestKafka(t *testing.T) {
 	writeBigEndian(conn, int32(len(request.Bytes())))
 	conn.Write(request.Bytes())
 
-	fmt.Println("Sent Request");
+	fmt.Println("Sent Request")
 
 	length := new(int32)
 	err = binary.Read(conn, binary.BigEndian, length)
@@ -217,7 +212,6 @@ func TestKafka(t *testing.T) {
 	readBigEndian(r, correlationId)
 	fmt.Printf("CorrelationId : %d\n", *correlationId)
 
-
 	errorCode := new(int16)
 	readBigEndian(r, errorCode)
 	fmt.Printf("Error code : %d\n", *errorCode)
@@ -235,7 +229,7 @@ func TestKafka(t *testing.T) {
 	// .. it's an array, so get size
 
 	type Version struct {
-		ApiKey int16
+		ApiKey     int16
 		MinVersion int16
 		MaxVersion int16
 	}
