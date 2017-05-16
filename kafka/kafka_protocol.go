@@ -3,11 +3,12 @@ package kafka
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"net"
-	"testing"
+	"os"
 	"time"
 )
 
@@ -136,11 +137,11 @@ func (r VersionsRequest) Encode() kafkaBytes {
 	return kafkaBytes(nil)
 }
 
-func connect(t *testing.T) net.Conn {
+func connect() net.Conn {
 	conn, err := net.Dial("tcp", "kafka:9092")
 	if err != nil {
 		fmt.Printf("Cannot establish connection to kafka broker : %v\n", err)
-		t.FailNow()
+		//		t.FailNow()
 	}
 
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -149,50 +150,147 @@ func connect(t *testing.T) net.Conn {
 	return conn
 }
 
-func TestKafkaRead(t *testing.T) {
+// Response
+
+type responseHeader struct {
+	size int32
+}
+
+type response interface {
+	Decode(io.Reader) (response, error)
+}
+
+type apiVersion struct {
+	ApiKey     int16
+	MinVersion int16
+	MaxVersion int16
+}
+
+type versionsResponse struct {
+	responseHeader
+	errorCode int16
+	versions  []apiVersion
+}
+
+func (r *versionsResponse) Decode(reader io.Reader) (response, error) {
+	fmt.Printf("%v\n", *r)
+	readBigEndian(reader, &r.size)
+	readBigEndian(reader, &r.errorCode)
+
+	if ErrNone == r.errorCode {
+		readArray(reader, func(reader io.Reader) {
+			v := new(apiVersion)
+			readBigEndian(reader, v)
+			r.versions = append(r.versions, *v)
+		})
+	} else {
+		return nil, errors.New(fmt.Sprintf("Received error %v\n", r.errorCode))
+	}
+
+	fmt.Printf("%v\n", *r)
+	return r, nil
+}
+
+func TestKafkaRead() {
 	fmt.Println("start")
 
-	conn := connect(t)
+	conn := connect()
 	defer conn.Close()
 
-	// Bad  [0 0 0 48 0 18 0 0 0 0 0 15 255 255 0 0 0 0 0 0 0 1 (<offset) 0 0 0 22 (<msgSize) 197 143 227 87 1 0 0 0 0 0 89 21 148 229 255 255 255 255 255 255 255 255]
-	// Good [         0 18 0 0 0 0 0 13 255 255 0 0 0 0 0 0 0 1 (<offset) 0 0 0 22 (<msgSize) 41 54 49 17    1 0 0 0 0 0 89 21 146 254 255 255 255 255 255 255 255 255]
 	r := requestMessage{
 		requestHeader{
-			apiKey:        ApiVersions,
-			apiVersion:    ApiVersionZero,
 			correlationId: 15,
+			//apiKey:        ApiMetaData,
+			//apiVersion:    ApiVersionOne,
+			apiKey:     ApiVersions,
+			apiVersion: ApiVersionZero,
 		},
 		kafkaString(nil),
 		[]requestBody{
-			NewRequestBody(nil, MetaDataRequest{"topiclogs"}.Encode()),
-			//NewRequestBody(nil, VersionsRequest{}.Encode()),
+			NewRequestBody(nil, VersionsRequest{}.Encode()),
+			//NewRequestBody(nil, MetaDataRequest{"topiclogs"}.Encode()),
 		},
 	}
 
+	err := sendMessage(conn, &r)
+
+	length := new(int32)
+	/*	err = binary.Read(conn, binary.BigEndian, length)
+		if err != nil {
+			fmt.Printf("Error reading from Kafka :%v \n", err)
+		}
+	*/
+	readBigEndian(conn, length)
+
+	fmt.Println("Response OK")
+
+	// now we need to process the response
+	// first int32 is the message size, allocate that amount of data, and read response
+	fmt.Printf("Response length : %d\n", *length)
+	response := make([]byte, *length)
+	i, err := conn.Read(response)
+	if err != nil || i != int(*length) {
+		fmt.Printf("Couldn't read response")
+	}
+	// create a NewBuffer for io.Reader interface, no allocations used
+	fmt.Printf("Response : %v\n", response)
+	buff := bytes.NewBuffer(response)
+
+	var resp versionsResponse
+	rx, err := resp.Decode(buff)
+	if err != nil {
+		fmt.Printf("Failed to decode: %v\n", err)
+		os.Exit(2)
+	}
+
+	fmt.Printf("%v\n", rx)
+
+	if _, err := buff.ReadByte(); err != io.EOF {
+		fmt.Errorf("Data still to be consumed")
+	} else {
+		fmt.Println(err)
+	}
+
+	fmt.Println("stop")
+}
+
+func sendMessage(conn net.Conn, r *requestMessage) error {
 	buff := new(bytes.Buffer)
 	r.Encode(buff)
 
 	fmt.Printf("len ? %d\n", buff.Len())
 
 	bytes := buff.Bytes()
-	fmt.Printf("%v\n", bytes)
 	binary.BigEndian.PutUint32(bytes, uint32(buff.Len()-4))
 
-	fmt.Printf("%v\n", bytes)
-
-	conn.Write(bytes)
-
-	fmt.Println("Sent Request")
-
-	length := new(int32)
-	err := binary.Read(conn, binary.BigEndian, length)
+	count, err := conn.Write(bytes)
 	if err != nil {
-		fmt.Printf("Error reading from Kafka :%v \n", err)
-		t.FailNow()
+		fmt.Printf("Sent %d bytes", count)
 	}
 
-	fmt.Println("Response OK")
+	return err
+}
 
-	fmt.Println("stop")
+func writeBigEndian(w io.Writer, data interface{}) {
+	if err := binary.Write(w, binary.BigEndian, data); err != nil {
+		fmt.Printf("Couldn't write : %v\n", data)
+	}
+}
+
+func readBigEndian(r io.Reader, data interface{}) {
+	if err := binary.Read(r, binary.BigEndian, data); err != nil {
+		fmt.Printf("Couldn't read : %v\n", data)
+	}
+}
+
+func readArray(r io.Reader, f func(io.Reader)) {
+	arrSize := new(int32)
+	readBigEndian(r, arrSize)
+	fmt.Printf("Array has %d elements\n", *arrSize)
+
+	for i := 0; i < int(*arrSize); i++ {
+		f(r)
+	}
+
+	// FIXME: Errors?
 }

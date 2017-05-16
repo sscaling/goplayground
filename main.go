@@ -1,7 +1,8 @@
 package main
 
-import "github.com/sscaling/goplayground/yacc"
+import "github.com/sscaling/goplayground/kafka"
 
 func main() {
-	yacc.Start()
+	//	yacc.Start()
+	kafka.TestKafkaRead()
 }
